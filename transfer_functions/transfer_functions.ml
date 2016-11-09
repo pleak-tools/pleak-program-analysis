@@ -72,7 +72,8 @@ let _ = List.iter print_string example_vars2; print_newline ()
 let vararr = Array.of_list example_vars2
 let env = Environment.make [||] (Array.map Var.of_string vararr)
 (*let mgr = Polka.manager_alloc_equalities ()*)
-let mgr = Polka.manager_alloc_loose ()
+(*let mgr = Polka.manager_alloc_loose ()*)
+let mgr = Ppl.manager_alloc_loose ()
 
 module StringSet = Set.Make(String)
 
