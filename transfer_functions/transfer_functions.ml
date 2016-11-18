@@ -9,6 +9,7 @@ type expr
   | Laplace
   | Le of expr * expr
   | Eq of expr * expr
+  | IfThenElse of expr * expr * expr
   (*
   | And of expr * expr
   | Not of expr
@@ -18,6 +19,7 @@ type expr
   | Sub of expr * expr
   | Div of expr * expr
   | Interval of float * float
+  | ScalarInterval of Scalar.t * Scalar.t
 
 type statement
   = Let of string * expr
@@ -36,18 +38,24 @@ let rec print_expr expr =
     | Laplace -> print_string "Laplace()"
     | Le (e1,e2) -> print_char '('; print_expr e1; print_string " <= "; print_expr e2; print_char ')'
     | Eq (e1,e2) -> print_char '('; print_expr e1; print_string " == "; print_expr e2; print_char ')'
+    | IfThenElse (e1,e2,e3) -> print_char '('; print_expr e1; print_string " ? "; print_expr e2; print_string " : "; print_expr e3; print_char ')'
     (*
     | And (e1,e2) -> print_char '('; print_expr e1; print_string " && "; print_expr e2; print_char ')'
     | Not e1 -> print_char '!'; print_expr e1
     *)
     | Input -> print_string "Input()"
     | Interval (r1,r2) -> print_char '['; print_float r1; print_char ','; print_float r2; print_char ']'
+    | ScalarInterval (s1,s2) -> print_char '['; printf "%a" Scalar.print s1; print_char ','; printf "%a" Scalar.print s2; print_char ']'
 
 
 let print_statement st =
     match st with
     | Let (x,expr) -> print_string x; print_string " := "; print_expr expr; print_newline ()
 
+
+let sum_floats xs = List.fold_left (+.) 0. xs
+let string_of_string_list strs = String.concat "," strs
+let string_of_float_list xs = string_of_string_list (List.map string_of_float xs)
 
 
 let example = [
@@ -61,6 +69,10 @@ let example = [
     Let ("d", Mul (C 3.0, V "w"));
     Let ("a", Add (V "k", V "c"));
     Let ("b", Add (V "l", V "d"));
+    Let ("e", Laplace);
+    Let ("f", Laplace);
+    Let ("g", Add (V "k", V "e"));
+    Let ("h", Add (V "l", V "f"));
 ]
 
 let vExp x = String.concat "" ["E";x]
@@ -68,7 +80,7 @@ let vVar x = String.concat "" ["V";x]
 
 let example_vars = List.(sort_uniq compare (map (fun (Let (x, _)) -> x) example))
 let example_vars2 = example_vars @ List.map vExp example_vars @ List.map vVar example_vars
-let _ = List.iter print_string example_vars2; print_newline ()
+let _ = printf "variables: %s\n" (string_of_string_list example_vars2)
 
 let vararr = Array.of_list example_vars2
 let env = Environment.make [||] (Array.map Var.of_string vararr)
@@ -110,6 +122,18 @@ let isVarLaplace x =
 
 let areVarsIndep x y = StringSet.(is_empty (inter (getDependset x) (getDependset y)))
 
+let areAllVarsIndep xs =
+    let rec f xs depset =
+	match xs with
+	| [] -> true
+	| y :: ys ->
+	    let dsy = getDependset y in
+	    if StringSet.(is_empty (inter dsy depset)) then
+		f ys (StringSet.union dsy depset)
+	    else
+		false
+    in f xs StringSet.empty
+
 let areVarsEqual x y =
     let tcons = Tcons1.(make (expr2texpr (Sub (V x, V y))) EQ) in
     Abstract1.sat_tcons mgr !astateRef tcons
@@ -122,8 +146,13 @@ let scalar2float s =
         | Mpqf q -> Mpqf.to_float q
     )
 
+let scalar_min s1 s2 = if Scalar.cmp s1 s2 < 0 then s1 else s2
+let scalar_max s1 s2 = if Scalar.cmp s1 s2 > 0 then s1 else s2
+
+let getVarBoundsScalar x = Abstract1.bound_variable mgr !astateRef (Var.of_string x)
+
 let getVarBounds x =
-    let bounds0 = Abstract1.bound_variable mgr !astateRef (Var.of_string x) in
+    let bounds0 = getVarBoundsScalar x in
     (scalar2float bounds0.inf, scalar2float bounds0.sup)
 
 let getExprBounds expr =
@@ -149,6 +178,12 @@ let diffPrivDist x y =
         max sup (-. inf) /. sqrt (0.5 *. getVarLowerBound (vVar x))
     else
         infinity
+
+let listDiffPrivDist xs ys =
+    if List.(length xs == length ys) && areAllVarsIndep xs && areAllVarsIndep ys then
+	sum_floats (List.map2 diffPrivDist xs ys)
+    else
+	infinity
 
 let assign_texpr x texpr = astateRef := Abstract1.assign_texpr mgr !astateRef (Var.of_string x) texpr None
 let assign_expr x expr = assign_texpr x (expr2texpr expr)
@@ -192,7 +227,7 @@ let processStatement_gen1 st =
                 isLaplaceRef := StringSet.add x !isLaplaceRef
         | _ -> ()
     );
-    printf "isLaplaceRef = {%s}\n" (String.concat "," (StringSet.elements !isLaplaceRef))
+    printf "isLaplaceRef = {%s}\n" (string_of_string_list (StringSet.elements !isLaplaceRef))
 
 
 let processStatement_gen2 st =
@@ -251,6 +286,10 @@ let processStatement_gen3 st =
             if cmp == -1 || cmp == 0 then assign_expr ex (C 1.0)
             else if cmp == 1 then assign_expr ex (C 0.0)
             else assign_expr ex (Interval (0.0,1.0))
+	| IfThenElse (_,V y2,V y3) ->
+	    let ey2bounds = getVarBoundsScalar (vExp y2) in
+	    let ey3bounds = getVarBoundsScalar (vExp y3) in
+	    assign_expr ex (ScalarInterval (scalar_min ey2bounds.inf ey3bounds.inf, scalar_max ey2bounds.sup ey3bounds.sup))
         | Laplace ->
             assign_expr ex (C 0.0)
         | _ -> ()
@@ -312,6 +351,8 @@ let processStatement_gen6 st =
         | Eq (e1,e2)
         | Le (e1,e2) ->
             getvars e1 @ getvars e2
+	| IfThenElse (e1,e2,e3) ->
+            getvars e1 @ getvars e2 @ getvars e3
         | _ ->
             []
     in
@@ -327,7 +368,7 @@ let processStatement_gen6 st =
         printVarBounds x;
         printVarBounds (vExp x);
         printVarBounds (vVar x);
-        printf "dependset[%s] = {%s}\n" x (String.concat "," (StringSet.elements dependset))
+        printf "dependset[%s] = {%s}\n" x (string_of_string_list (StringSet.elements dependset))
 
 let processStatement st =
     print_statement st;
@@ -340,11 +381,18 @@ let processStatement st =
 let printDiffPrivDist x y =
     printf "diffPrivDist(%s,%s) = %f\n" x y (diffPrivDist x y)
 
+let printListDiffPrivDist xs ys =
+    printf "diffPrivDist([%s],[%s]) = %f\n" (string_of_string_list xs) (string_of_string_list ys) (listDiffPrivDist xs ys)
+
 let main () =
     List.iter print_statement example;
     add_tcons (expr2tconsEQ (Sub (Sub (V "i", V "j"), Interval (-2.0, 2.0))));
     List.iter processStatement example;
     printDiffPrivDist "a" "b";
+    printDiffPrivDist "c" "d";
+    printDiffPrivDist "g" "h";
+    printListDiffPrivDist ["a";"c"] ["b";"d"];
+    printListDiffPrivDist ["a";"g"] ["b";"h"];
     printExprBounds (Sub (V "i", V "j"));
     printExprBounds (Sub (V "Ea", V "Eb"));
     printExprBounds (Sub (Sub (V "Ea", V "Eb"), Mul (C 2.0, Sub (V "i", V "j"))));
