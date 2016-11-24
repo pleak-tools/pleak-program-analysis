@@ -60,19 +60,25 @@ let string_of_float_list xs = string_of_string_list (List.map string_of_float xs
 
 let example = [
     Let ("i", Input);
-    Let ("j", Input);
+    Let ("I", Input);
     Let ("k", Mul (C 2.0, V "i"));
-    Let ("l", Mul (C 2.0, V "j"));
+    Let ("K", Mul (C 2.0, V "I"));
     Let ("v", Laplace);
-    Let ("w", Laplace);
+    Let ("V", Laplace);
     Let ("c", Mul (C 3.0, V "v"));
-    Let ("d", Mul (C 3.0, V "w"));
+    Let ("C", Mul (C 3.0, V "V"));
     Let ("a", Add (V "k", V "c"));
-    Let ("b", Add (V "l", V "d"));
+    Let ("A", Add (V "K", V "C"));
     Let ("e", Laplace);
-    Let ("f", Laplace);
+    Let ("E", Laplace);
     Let ("g", Add (V "k", V "e"));
-    Let ("h", Add (V "l", V "f"));
+    Let ("G", Add (V "K", V "E"));
+    Let ("h", Mul (V "a", V "g"));
+    Let ("H", Mul (V "A", V "G"));
+    Let ("d", Add (V "a", C 5.0));
+    Let ("D", Add (V "A", C 5.0));
+    Let ("f", Mul (V "a", V "d"));
+    Let ("F", Mul (V "A", V "D"));
 ]
 
 let vExp x = String.concat "" ["E";x]
@@ -93,8 +99,12 @@ module StringMap = Map.Make(String)
 let astateRef = ref (Abstract1.top mgr env)
 let isLaplaceRef = ref StringSet.empty
 let dependsetMapRef = ref StringMap.empty
+let varExprRef = ref StringMap.empty
+let isSyntacticallyConstRef = ref StringSet.empty
 
 let getDependset x = StringMap.find x !dependsetMapRef
+let getVarExpr x = StringMap.find x !varExprRef
+let isSyntacticallyConst x = StringSet.mem x !isSyntacticallyConstRef
 
 let expr2texpr expr =
     Texpr1.of_expr env (
@@ -121,6 +131,9 @@ let isVarLaplace x =
     StringSet.mem x !isLaplaceRef
 
 let areVarsIndep x y = StringSet.(is_empty (inter (getDependset x) (getDependset y)))
+
+let all bs = List.fold_left (&&) true bs
+let isVarIndepOfAll x xs = all (List.map (areVarsIndep x) xs)
 
 let areAllVarsIndep xs =
     let rec f xs depset =
@@ -171,19 +184,84 @@ let printExprBounds expr =
 let getVarLowerBound x = fst (getVarBounds x)
 let getVarUpperBound x = snd (getVarBounds x)
 
+let isSyntConstOrLaplace x = isSyntacticallyConst x || isVarLaplace x
+
+(* a Laplace variable which is not computed from other Laplace variables and constants *)
+let isMaxLaplace x =
+    isVarLaplace x && not (
+	match getVarExpr x with
+	| C _ ->
+	    true
+        | Add (V y,C _)
+        | Mul (C _,V y)
+	| V y ->
+	    isSyntConstOrLaplace y
+        | Add (V y1,V y2)
+        | Mul (V y1,V y2)
+        | Le (V y1,V y2)
+        | Eq (V y1,V y2) ->
+	    isSyntConstOrLaplace y1 && isSyntConstOrLaplace y2
+        | IfThenElse (V y1,V y2,V y3) ->
+	    isSyntConstOrLaplace y1 && isSyntConstOrLaplace y2 && isSyntConstOrLaplace y3
+	| _ ->
+	    false
+    )
+
 (* upper bound on the differential-privacy distance *)
-let diffPrivDist x y =
+let simpleDiffPrivDist x y =
     if isVarLaplace x && isVarLaplace y && areVarsEqual (vVar x) (vVar y) then
         let (inf, sup) = getExprBounds (Sub (V (vExp x), V (vExp y))) in
         max sup (-. inf) /. sqrt (0.5 *. getVarLowerBound (vVar x))
     else
         infinity
 
+(*
 let listDiffPrivDist xs ys =
     if List.(length xs == length ys) && areAllVarsIndep xs && areAllVarsIndep ys then
 	sum_floats (List.map2 diffPrivDist xs ys)
     else
 	infinity
+*)
+
+let diffPrivDist xs ys =
+    let eqvVars = ref [] in
+    let dpDist = ref 0.0 in
+    let addEqvVars xy = eqvVars := xy :: !eqvVars in
+    let addDpDist r = dpDist := !dpDist +. r in
+    let equal xy xys = List.mem xy xys in
+    let indep xy xys = isVarIndepOfAll (fst xy) (List.map fst xys) && isVarIndepOfAll (snd xy) (List.map snd xys) in
+    let rec f x x' =
+	if isMaxLaplace x || isMaxLaplace x' then
+	    let xy = (x,x') in
+	    let xys = !eqvVars in
+	    if equal xy xys then
+		()
+	    else if indep xy xys then (
+		addEqvVars xy;
+		addDpDist (simpleDiffPrivDist x x')
+	    ) else
+		addDpDist infinity
+	else
+	    match (getVarExpr x,getVarExpr x') with
+	    | (V y, V y') ->
+		f y y'
+	    | (C r, C r') ->
+		if r != r' then addDpDist infinity
+	    | (Add (V y,C r), Add (V y',C r'))
+	    | (Mul (C r,V y), Mul (C r',V y')) ->
+		if r != r' then addDpDist infinity
+		else f y y'
+	    | (Add (V y1,V y2), Add (V y1',V y2'))
+	    | (Mul (V y1,V y2), Mul (V y1',V y2'))
+	    | (Le (V y1,V y2), Le (V y1',V y2'))
+	    | (Eq (V y1,V y2), Eq (V y1',V y2')) ->
+		(f y1 y1'; f y2 y2')
+	    | (IfThenElse (V y1,V y2,V y3), IfThenElse (V y1',V y2',V y3')) ->
+		(f y1 y1'; f y2 y2'; f y3 y3')
+	    | _ -> addDpDist infinity
+    in
+    List.iter2 f xs ys;
+    !dpDist
 
 let assign_texpr x texpr = astateRef := Abstract1.assign_texpr mgr !astateRef (Var.of_string x) texpr None
 let assign_expr x expr = assign_texpr x (expr2texpr expr)
@@ -337,6 +415,30 @@ let processStatement_gen4 st =
     );
     printf "astate=%a\n" Abstract1.print !astateRef
 
+let processStatement_isSyntacticallyConst st =
+    match st with
+    | Let (x,expr) ->
+	match expr with
+        | Add (V y,C _)
+        | Mul (C _,V y)
+	| V y ->
+	    if isSyntacticallyConst y then isSyntacticallyConstRef := StringSet.add x !isSyntacticallyConstRef
+	| C _ ->
+	    isSyntacticallyConstRef := StringSet.add x !isSyntacticallyConstRef
+        | Add (V y1,V y2)
+        | Mul (V y1,V y2)
+        | Le (V y1,V y2)
+        | Eq (V y1,V y2) ->
+	    if isSyntacticallyConst y1 && isSyntacticallyConst y2 then isSyntacticallyConstRef := StringSet.add x !isSyntacticallyConstRef
+        | IfThenElse (V y1,V y2,V y3) ->
+	    if isSyntacticallyConst y1 && isSyntacticallyConst y2 && isSyntacticallyConst y3 then isSyntacticallyConstRef := StringSet.add x !isSyntacticallyConstRef
+	| _ -> ()
+
+let processStatement_gen5 st =
+    match st with
+    | Let (x,expr) ->
+	varExprRef := StringMap.add x expr !varExprRef 
+
 (* independences *)
 let processStatement_gen6 st =
     (*printf "processStatement_gen6\n";*)
@@ -376,26 +478,32 @@ let processStatement st =
     processStatement_gen2 st;
     processStatement_gen3 st;
     processStatement_gen4 st;
+    processStatement_isSyntacticallyConst st;
+    processStatement_gen5 st;
     processStatement_gen6 st
 
 let printDiffPrivDist x y =
-    printf "diffPrivDist(%s,%s) = %f\n" x y (diffPrivDist x y)
+    printf "diffPrivDist(%s,%s) = %f\n" x y (diffPrivDist [x] [y])
 
 let printListDiffPrivDist xs ys =
-    printf "diffPrivDist([%s],[%s]) = %f\n" (string_of_string_list xs) (string_of_string_list ys) (listDiffPrivDist xs ys)
+    printf "diffPrivDist([%s],[%s]) = %f\n" (string_of_string_list xs) (string_of_string_list ys) (diffPrivDist xs ys)
 
 let main () =
     List.iter print_statement example;
-    add_tcons (expr2tconsEQ (Sub (Sub (V "i", V "j"), Interval (-2.0, 2.0))));
+    add_tcons (expr2tconsEQ (Sub (Sub (V "i", V "I"), Interval (-2.0, 2.0))));
     List.iter processStatement example;
-    printDiffPrivDist "a" "b";
-    printDiffPrivDist "c" "d";
-    printDiffPrivDist "g" "h";
-    printListDiffPrivDist ["a";"c"] ["b";"d"];
-    printListDiffPrivDist ["a";"g"] ["b";"h"];
-    printExprBounds (Sub (V "i", V "j"));
-    printExprBounds (Sub (V "Ea", V "Eb"));
-    printExprBounds (Sub (Sub (V "Ea", V "Eb"), Mul (C 2.0, Sub (V "i", V "j"))));
+    printDiffPrivDist "a" "A";
+    printDiffPrivDist "c" "C";
+    printDiffPrivDist "g" "G";
+    printListDiffPrivDist ["a";"c"] ["A";"C"];
+    printListDiffPrivDist ["a";"g"] ["A";"G"];
+    printListDiffPrivDist ["a";"g";"h"] ["A";"G";"H"];
+    printListDiffPrivDist ["a";"g";"h";"f"] ["A";"G";"H";"F"];
+    printDiffPrivDist "h" "H";
+    printDiffPrivDist "f" "F";
+    printExprBounds (Sub (V "i", V "I"));
+    printExprBounds (Sub (V "Ea", V "EA"));
+    printExprBounds (Sub (Sub (V "Ea", V "EA"), Mul (C 2.0, Sub (V "i", V "I"))));
 ;;
 
 
