@@ -3,5 +3,5 @@ transfer_functions: transfer_functions.ml
 		/usr/lib/ocaml/bigarray.cmxa \
 		/usr/lib/ocaml/apron/gmp.cmxa \
 		/usr/lib/ocaml/apron/apron.cmxa \
-		/usr/lib/ocaml/apron/ppl.cmxa \
+		/usr/lib/ocaml/apron/polka.cmxa \
 		transfer_functions.ml
