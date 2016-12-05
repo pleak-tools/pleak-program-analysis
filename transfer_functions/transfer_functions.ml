@@ -2,28 +2,28 @@ open Apron
 open Format
 
 type expr
-  = V of string
-  | C of float
-  | Add of expr * expr
-  | Mul of expr * expr
-  | Laplace
-  | Le of expr * expr
-  | Eq of expr * expr
-  | IfThenElse of expr * expr * expr
-  | Sum of expr
-  (*
-  | And of expr * expr
-  | Not of expr
-  *)
-  | Input
-  (* the following are used only internally *)
-  | Sub of expr * expr
-  | Div of expr * expr
-  | Interval of float * float
-  | ScalarInterval of Scalar.t * Scalar.t
+    = V of string
+    | C of float
+    | Add of expr * expr
+    | Mul of expr * expr
+    | Laplace
+    | Le of expr * expr
+    | Eq of expr * expr
+    | IfThenElse of expr * expr * expr
+    | Sum of expr
+    (*
+    | And of expr * expr
+    | Not of expr
+    *)
+    | Input
+    (* the following are used only internally *)
+    | Sub of expr * expr
+    | Div of expr * expr
+    | Interval of float * float
+    | ScalarInterval of Scalar.t * Scalar.t
 
 type statement
-  = Let of string * expr
+    = Let of string * expr
 
 type program = statement list
 
@@ -55,6 +55,8 @@ let print_statement st =
     match st with
     | Let (x,expr) -> print_string x; print_string " := "; print_expr expr; print_newline ()
 
+
+let println s = if debug then (print_string s; print_newline ())
 
 let sum_floats xs = List.fold_left (+.) 0. xs
 let string_of_string_list strs = String.concat "," strs
@@ -122,6 +124,7 @@ let _ = printf "variables: %s\n" (string_of_string_list example_vars2)
 
 let vararr = Array.of_list example_vars2
 let env = Environment.make [||] (Array.map Var.of_string vararr)
+(*let mgr = Box.manager_alloc ()*)
 let mgr = Polka.manager_alloc_loose ()
 (*let mgr = Ppl.manager_alloc_loose ()*)
 
@@ -204,10 +207,14 @@ let areVarsEqual x y =
 
 let scalar2float s =
     Scalar.(
-        match s with
-        | Float r -> r
-        | Mpfrf r -> Mpfrf.to_float r
-        | Mpqf q -> Mpqf.to_float q
+	let isinf = is_infty s in
+	if isinf != 0 then
+	   float_of_int isinf *. infinity
+	else
+	    match s with
+	    | Float r -> r
+	    | Mpfrf r -> Mpfrf.to_float r
+	    | Mpqf q -> Mpqf.to_float q
     )
 
 let scalar_min s1 s2 = if Scalar.cmp s1 s2 < 0 then s1 else s2
@@ -395,7 +402,7 @@ let compare_exprs e1 e2 =
 
 
 let processStatement_gen1 st =
-    (*printf "processStatement_gen1\n";*)
+    (*println "processStatement_gen1";*)
     (
     match st with
     | Let (x,expr) ->
@@ -418,7 +425,7 @@ let processStatement_gen1 st =
 
 
 let processStatement_gen2 st =
-    (*printf "processStatement_gen2\n";*)
+    (*println "processStatement_gen2";*)
     (
     match st with
     | Let (x,expr) ->
@@ -443,7 +450,7 @@ let processStatement_gen2 st =
 
 (* expectations *)
 let processStatement_gen3 st =
-    (*printf "processStatement_gen3\n";*)
+    (*println "processStatement_gen3";*)
     (
     match st with
     | Let (x,expr) ->
@@ -485,7 +492,7 @@ let processStatement_gen3 st =
 
 (* variances *)
 let processStatement_gen4 st =
-    (*printf "processStatement_gen4\n";*)
+    (*println "processStatement_gen4";*)
     (
     match st with
     | Let (x,expr) ->
@@ -553,7 +560,7 @@ let processStatement_gen5 st =
 
 (* independences *)
 let processStatement_gen6 st =
-    (*printf "processStatement_gen6\n";*)
+    (*println "processStatement_gen6";*)
     (* for each variable x, find the set dependset(x) of Laplace variables that it depends on *)
     (* then Indep(x,y) if dependset(x) and dependset(y) are disjoint *)
     let rec getvars expr =
@@ -583,7 +590,7 @@ let processStatement_gen6 st =
 	    printVarBounds x;
 	    printVarBounds (vExp x);
 	    printVarBounds (vVar x);
-	    printf "dependset[%s] = {%s}\n" x (string_of_string_list (StringSet.elements dependset))
+	    printf "dependset[%s] = {%s}" x (string_of_string_list (StringSet.elements dependset)); print_newline ()
 	)
 
 let processStatement st =
