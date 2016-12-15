@@ -99,7 +99,7 @@ let example = add_uppercase_copy [
 
 let rec intsFromTo a b = if a > b then [] else a :: intsFromTo (a+1) b
 
-let largeExample = List.map (fun i -> Let (String.concat "" ["x"; string_of_int i], C 2.0)) (intsFromTo 1 200)
+let largeExample = List.map (fun i -> Let (String.concat "" ["x"; string_of_int i], C 2.0)) (intsFromTo 1 20000)
 
 let example = [
     Let ("a", Input);
@@ -183,10 +183,10 @@ let expr2texpr expr =
 let expr2tconsEQ expr = Tcons1.(make (expr2texpr expr) EQ)
 let expr2tconsSUP expr = Tcons1.(make (expr2texpr expr) SUP)
 
-let assign_texpr x texpr = astateRef := Abstract1.assign_texpr mgr !astateRef (Var.of_string x) texpr None
+let assign_texpr x texpr = Abstract1.assign_texpr_with mgr !astateRef (Var.of_string x) texpr None
 let assign_expr x expr = assign_texpr x (expr2texpr expr)
 
-let add_tcons tcons = astateRef := Abstract1.meet_tcons_array mgr !astateRef Tcons1.(let arr = array_make !env 1 in array_set arr 0 tcons; arr)
+let add_tcons tcons = Abstract1.meet_tcons_array_with mgr !astateRef Tcons1.(let arr = array_make !env 1 in array_set arr 0 tcons; arr)
 
 let tcons2abstract tcons = Abstract1.of_tcons_array mgr !env Tcons1.(let arr = array_make !env 1 in array_set arr 0 tcons; arr)
 
