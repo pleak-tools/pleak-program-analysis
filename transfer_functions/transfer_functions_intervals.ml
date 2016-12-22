@@ -24,8 +24,8 @@ type expr
 
 type statement
     = Let of string * expr
-
-type program = statement list
+    | Repeat of expr * program
+and program = statement list
 
 let debug = false
 
@@ -50,10 +50,13 @@ let rec print_expr expr =
     | Interval (r1,r2) -> print_char '['; print_float r1; print_char ','; print_float r2; print_char ']'
     | ScalarInterval (s1,s2) -> print_char '['; printf "%a" Scalar.print s1; print_char ','; printf "%a" Scalar.print s2; print_char ']'
 
-
-let print_statement st =
+let rec print_statement st =
     match st with
     | Let (x,expr) -> print_string x; print_string " := "; print_expr expr; print_newline ()
+    | Repeat (e1,prog) -> print_string "Repeat "; print_expr e1; print_newline (); print_program_indented prog
+and print_program_indented prog = List.iter (fun st -> print_string "    "; print_statement st) prog
+
+let print_program prog = List.iter print_statement prog
 
 
 let println s = if debug then (print_string s; print_newline ())
@@ -113,6 +116,18 @@ let example = [
     Let ("d", Laplace);
     Let ("e", Add (V "h", V "d"));
     Let ("g", Mul (V "e", V "e"));
+    Let ("z", C 1.0);
+    Let ("y", C 0.0);
+    Let ("v", V "g");
+    Let ("n", Input);
+    Let ("i", C 0.0);
+    Repeat (V "n", [
+	Let ("i", Add (V "i", C 1.0));
+	Let ("v", C 0.0);
+	Let ("z", Mul (V "z", V "g"));
+	Let ("w", Mul (V "z", V "i"));
+	Let ("y", Add (V "y", V "w"));
+    ]);
 ]
 
 let vExp x = String.concat "" ["E";x]
@@ -132,14 +147,23 @@ let astateRef = ref (Abstract1.top mgr !env)
 let isLaplaceRef = ref StringSet.empty
 let dependsetMapRef = ref StringMap.empty
 let vecDependsetMapRef = ref StringMap.empty
+let dpDependsetMapRef = ref StringMap.empty
 let varExprRef = ref StringMap.empty
 let isSyntacticallyConstRef = ref StringSet.empty
 let vecDistMapRef = ref StringMap.empty
 let numVecDists = ref 0
 let scalarDistMapRef = ref StringMap.empty
 
+let programVars program =
+    let rec f st =
+	match st with
+	| Let (x,_) -> [x]
+	| Repeat (i,prog) -> g prog
+    and g prog = List.(concat (map f prog)) in
+    List.(sort_uniq compare (g program))
+
 let initEnvironment program =
-    let program_vars = List.(sort_uniq compare (map (fun (Let (x, _)) -> x) program)) in
+    let program_vars = programVars program in
     let program_vars2 = program_vars @ List.map vExp program_vars @ List.map vVar program_vars in
     let _ = printf "variables: %s\n" (string_of_string_list program_vars2) in
     let vararr = Array.of_list program_vars2 in
@@ -148,6 +172,7 @@ let initEnvironment program =
 
 let getDependset x = StringMap.find x !dependsetMapRef
 let getVecDependset x = StringMap.find x !vecDependsetMapRef
+let getDpDependset x = StringMap.find x !dpDependsetMapRef
 let getVarExpr x = StringMap.find x !varExprRef
 let isSyntacticallyConst x = StringSet.mem x !isSyntacticallyConstRef
 
@@ -189,6 +214,9 @@ let assign_expr x expr = assign_texpr x (expr2texpr expr)
 let add_tcons tcons = Abstract1.meet_tcons_array_with mgr !astateRef Tcons1.(let arr = array_make !env 1 in array_set arr 0 tcons; arr)
 
 let tcons2abstract tcons = Abstract1.of_tcons_array mgr !env Tcons1.(let arr = array_make !env 1 in array_set arr 0 tcons; arr)
+
+let killVar1 x = assign_texpr x Texpr1.(of_expr !env (Cst (Coeff.Interval Interval.top)))
+let killVar x = killVar1 x; killVar1 (vExp x); killVar1 (vVar x)
 
 let isVarConst x =
     let tcons = expr2tconsEQ (V (vVar x)) in
@@ -239,12 +267,6 @@ let areVarBoundsEqual x =
     let bounds = getVarBoundsScalar x in
     Scalar.equal bounds.inf bounds.sup
 
-(*
-let areVarsEqual x y =
-    let tcons = Tcons1.(make (expr2texpr (Sub (V x, V y))) EQ) in
-    Abstract1.sat_tcons mgr !astateRef tcons
-*)
-
 let getExprBounds expr =
     let bounds0 = Abstract1.bound_texpr mgr !astateRef (expr2texpr expr) in
     (scalar2float bounds0.inf, scalar2float bounds0.sup)
@@ -288,60 +310,9 @@ let scalarDist x =
     let (inf, sup) = getVarBounds (vExp x) in
     min (sup -. inf) (getScalarDist x)
 
-(*
-let scalarDist x y =
-    let (inf, sup) = getExprBounds (Sub (V (vExp x), V (vExp y))) in
-    max sup (-. inf)
-*)
-
-(*
-let addScalarDist x y d =
-    add_tcons (expr2tconsEQ (Sub (Sub (V (vExp x), V (vExp y)), Interval (-. d, d))))
-*)
-
 let addVarInterval x a b =
     (*add_tcons (expr2tconsEQ (Sub (V (vExp x), Interval (a, b))))*)
     add_tcons (expr2tconsEQ (Sub (V x, Interval (a, b))))
-
-(*
-let vecDist xs =
-    let vecDistNos = ref [] in
-    let dist = ref 0.0 in
-    let addVdn x = vecDistNos := x :: !vecDistNos in
-    let addDist r = dist := !dist +. r in
-    let equal x xs = List.mem x xs in
-    let rec f x =
-	if hasVecDist x then
-	    let vdn = getVecDistNo x in
-	    let vdns = !vecDistNos in
-	    if equal vdn vdns then
-		()
-	    else (
-		addVdn vdn;
-		addDist (getVecDist x)
-	    )
-	else
-	    match getVarExpr x with
-	    | V y ->
-		f y
-	    | C r ->
-		()
-	    | Add (V y,C r)
-	    | Mul (C r,V y) ->
-		f y
-	    | Add (V y1,V y2)
-	    | Mul (V y1,V y2)
-	    | Le (V y1,V y2)
-	    | Eq (V y1,V y2) ->
-		(f y1; f y2)
-	    | IfThenElse (V y1,V y2,V y3) ->
-		(f y1; f y2; f y3)
-	    | _ ->
-		addDist infinity
-    in
-    List.iter f xs;
-    !dist
-*)
 
 let vecDist xs =
     let vecDistNos = ref [] in
@@ -363,42 +334,14 @@ let vecDist xs =
 	    addDist infinity
     in
     List.iter (StringSet.iter f) (List.map getVecDependset xs);
-    (*sum_floats (List.map getVecDistOrInf xs)*)
     !dist
-
-(*
-let rec computeDists x =
-    match getVarExpr x with
-    | Sum (V y) ->
-	let vd = vecDist [y] in
-	let sd = scalarDist y in
-	if debug then printf "computeDists %s vd=%f sd=%f\n" x vd sd;
-	addScalarDist x (vd *. sd)
-    | Add (V y1, V y2) ->
-	computeDists y1;
-	computeDists y2
-    | _ -> ()
-*)
 
 (* upper bound on the differential-privacy distance *)
 let simpleDiffPrivDist x =
     if isVarLaplace x && areVarBoundsEqual (vVar x) then (
-	(*computeDists x;*)
-	(*
-        let (inf, sup) = getExprBounds (Sub (V (vExp x), V (vExp y))) in
-        max sup (-. inf) /. sqrt (0.5 *. getVarLowerBound (vVar x))
-	*)
         scalarDist x /. sqrt (0.5 *. getVarLowerBound (vVar x))
     ) else
         infinity
-
-(*
-let listDiffPrivDist xs ys =
-    if List.(length xs == length ys) && areAllVarsIndep xs && areAllVarsIndep ys then
-	sum_floats (List.map2 diffPrivDist xs ys)
-    else
-	infinity
-*)
 
 let diffPrivDist xs =
     let eqvVars = ref [] in
@@ -418,24 +361,9 @@ let diffPrivDist xs =
 	    ) else
 		addDpDist infinity
 	else
-	    match getVarExpr x with
-	    | V y ->
-		f y
-	    | C r ->
-		()
-	    | Add (V y,C r)
-	    | Mul (C r,V y) ->
-		f y
-	    | Add (V y1,V y2)
-	    | Mul (V y1,V y2)
-	    | Le (V y1,V y2)
-	    | Eq (V y1,V y2) ->
-		(f y1; f y2)
-	    | IfThenElse (V y1,V y2,V y3) ->
-		(f y1; f y2; f y3)
-	    | _ -> addDpDist infinity
+	    addDpDist infinity
     in
-    List.iter f xs;
+    List.iter (StringSet.iter f) (List.map getDpDependset xs);
     !dpDist
 
 let compare_exprs e1 e2 =
@@ -697,18 +625,66 @@ let processStatement_vecDependset st =
         vecDependsetMapRef := StringMap.add x dependset !vecDependsetMapRef;
 	if debug then printf "vecDependset[%s] = {%s}\n" x (string_of_string_list (StringSet.elements dependset))
 
+let dpDependsetChanged = ref false
+
+let processStatement_dpDependset1 certainlyExecuted st =
+    (* for each variable x, find the set dpDependset(x) of maximal Laplace variables and input variables that it depends on *)
+    (* dpDependset(x) is used to compute dpDist *)
+    match st with
+    | Let (x,expr) ->
+        let dependset =
+	    if isMaxLaplace x then
+		StringSet.singleton x
+	    else
+		match expr with
+		| Input ->
+		    StringSet.singleton x
+		| _ ->
+		    List.fold_right StringSet.union (List.map getDpDependset (getvars expr)) StringSet.empty
+        in
+	let hasPrevDepset = StringMap.mem x !dpDependsetMapRef in
+	let newDependset =
+	    if certainlyExecuted || not hasPrevDepset then
+		dependset
+	    else
+		StringSet.union (getDpDependset x) dependset
+	in
+	if not hasPrevDepset || not (StringSet.equal (getDpDependset x) newDependset) then (
+	    dpDependsetMapRef := StringMap.add x newDependset !dpDependsetMapRef;
+	    dpDependsetChanged := true
+	);
+	if debug then printf "dpDependset[%s] = {%s}\n" x (string_of_string_list (StringSet.elements newDependset))
+
+let processStatement_dpDependset st = processStatement_dpDependset1 true st
+
+let rec processRepeatStatement_dpDependset m n prog =
+    if debug then printf "processRepeatStatement_dpDependset %d %d\n" m n;
+    if n > 0 then (
+	dpDependsetChanged := false;
+	List.iter (processStatement_dpDependset1 (m>0)) prog;
+	if !dpDependsetChanged then
+	    processRepeatStatement_dpDependset (m-1) (n-1) prog
+    )
 
 let processStatement st =
     print_statement st;
-    processStatement_gen1 st;
-    processStatement_gen2 st;
-    processStatement_gen3 st;
-    processStatement_gen4 st;
-    processStatement_scalarDists st;
-    processStatement_isSyntacticallyConst st;
-    processStatement_gen5 st;
-    processStatement_gen6 st;
-    processStatement_vecDependset st
+    match st with
+    | Let (_,_) ->
+	processStatement_gen1 st;
+	processStatement_gen2 st;
+	processStatement_gen3 st;
+	processStatement_gen4 st;
+	processStatement_scalarDists st;
+	processStatement_isSyntacticallyConst st;
+	processStatement_gen5 st;
+	processStatement_gen6 st;
+	processStatement_vecDependset st;
+	processStatement_dpDependset st
+    | Repeat (e1,prog) ->
+	List.iter killVar (programVars prog); (* remove the information that is not computed correctly for loops *)
+	let (inf,sup) = getExprBounds e1 in
+	let (m,n) = (int_of_float (floor inf), int_of_float (ceil sup)) in
+	processRepeatStatement_dpDependset m n prog
 
 let printDiffPrivDist x =
     printf "diffPrivDist(%s) = %f\n" x (diffPrivDist [x])
@@ -747,17 +723,22 @@ let main () =
     List.iter print_statement example;
     addVarInterval "a" 100.0 200.0;
     addVarInterval "f" 50.0 60.0;
+    (*
+    addVarInterval "n" 0.0 0.0;
+    addVarInterval "n" 0.0 10.0;
+    *)
+    addVarInterval "n" 10.0 20.0;
     addVecDist ["a";"f"] 2.0;
     List.iter processStatement example;
-    (*add_tcons (expr2tconsEQ (Sub (Sub (V ("Ea", V "EA"), Interval (-100.0, 100.0))));*)
     printVecDist ["a"];
     printVecDist ["f"];
     printVecDist ["b"];
     printVecDist ["a";"f";"b"];
-    (*addScalarDist "a" "A" 100.0;*)
     printDiffPrivDist "d";
     printDiffPrivDist "e";
     printDiffPrivDist "g";
+    printDiffPrivDist "y";
+    printDiffPrivDist "v";
     printf "astate=%a\n" Abstract1.print !astateRef;
 ;;
 
