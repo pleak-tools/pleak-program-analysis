@@ -3,6 +3,7 @@ open Format
 
 type expr
     = V of string
+    | Slice of string * int * int
     | C of float
     | Add of expr * expr
     | Mul of expr * expr
@@ -24,6 +25,7 @@ type expr
 
 type statement
     = Let of string * expr
+    | LetSlice of string * int * int * expr
     | Repeat of expr * program
 and program = statement list
 
@@ -32,6 +34,7 @@ let debug = false
 let rec print_expr expr =
     match expr with
     | V x -> print_string x
+    | Slice (x,i1,i2) -> printf "%s[%d:%d]" x i1 i2
     | C r -> print_float r
     | Add (e1,e2) -> print_char '('; print_expr e1; print_string " + "; print_expr e2; print_char ')'
     | Sub (e1,e2) -> print_char '('; print_expr e1; print_string " - "; print_expr e2; print_char ')'
@@ -53,6 +56,7 @@ let rec print_expr expr =
 let rec print_statement st =
     match st with
     | Let (x,expr) -> print_string x; print_string " := "; print_expr expr; print_newline ()
+    | LetSlice (x,i1,i2,expr) -> printf "%s[%d:%d]" x i1 i2; print_string " := "; print_expr expr; print_newline ()
     | Repeat (e1,prog) -> print_string "Repeat "; print_expr e1; print_newline (); print_program_indented prog
 and print_program_indented prog = List.iter (fun st -> print_string "    "; print_statement st) prog
 
@@ -130,6 +134,16 @@ let example = [
     ]);
 ]
 
+let slicesExample = [
+    Let ("x", Input);
+    Let ("y", Add (V "x", C 3.0));
+    LetSlice ("y",100,200, Mul (Slice ("x",100,200), C 2.0));
+    LetSlice ("y",250,300, Mul (Slice ("x",100,150), C 0.5));
+    LetSlice ("z",30,80, Slice ("y",110,160));
+    LetSlice ("z",100,170, Slice ("y",240,310));
+    (*LetSlice ("z",200,210, Add (Slice ("y",40,50), Slice ("y",270,280))) (*doesn't work*)*)
+]
+
 let vExp x = String.concat "" ["E";x]
 let vVar x = String.concat "" ["V";x]
 
@@ -153,11 +167,17 @@ let isSyntacticallyConstRef = ref StringSet.empty
 let vecDistMapRef = ref StringMap.empty
 let numVecDists = ref 0
 let scalarDistMapRef = ref StringMap.empty
+let slicesMapRef = ref StringMap.empty
+
+let scalar_max s1 s2 = if Scalar.cmp s1 s2 > 0 then s1 else s2
+let scalar_min s1 s2 = if Scalar.cmp s1 s2 < 0 then s1 else s2
+let interval_union t1 t2 = Interval.(if is_bottom t1 then t2 else if is_bottom t2 then t1 else of_scalar (scalar_min t1.inf t2.inf) (scalar_max t1.sup t2.sup))
 
 let programVars program =
     let rec f st =
 	match st with
 	| Let (x,_) -> [x]
+	| LetSlice (x,_,_,_) -> [x]
 	| Repeat (i,prog) -> g prog
     and g prog = List.(concat (map f prog)) in
     List.(sort_uniq compare (g program))
@@ -217,6 +237,8 @@ let tcons2abstract tcons = Abstract1.of_tcons_array mgr !env Tcons1.(let arr = a
 
 let killVar1 x = assign_texpr x Texpr1.(of_expr !env (Cst (Coeff.Interval Interval.top)))
 let killVar x = killVar1 x; killVar1 (vExp x); killVar1 (vVar x)
+
+let setVarBoundsScalar x t = assign_texpr x Texpr1.(of_expr !env (Cst (Coeff.Interval t)))
 
 let isVarConst x =
     let tcons = expr2tconsEQ (V (vVar x)) in
@@ -282,6 +304,94 @@ let printExprBounds expr =
 
 let getVarLowerBound x = fst (getVarBounds x)
 let getVarUpperBound x = snd (getVarBounds x)
+
+let getSlices x =
+    if StringMap.mem x !slicesMapRef then
+	StringMap.find x !slicesMapRef
+    else
+	[(0,Interval.top)]
+
+let setSlices x sls = slicesMapRef := StringMap.add x sls !slicesMapRef
+
+let getSlice x ((i1,i2) : int * int) =
+    let slices = getSlices x in
+    let rec f sls bounds =
+	match sls with
+	| (j1,b1) :: (j2,b2) :: sls' ->
+	    f ((j2,b2) :: sls') (
+		if i2 <= j1 || i1 >= j2 then
+		    bounds
+		else
+		    interval_union bounds b1)
+	| [(j1,b1)] ->
+	    if i2 <= j1 then
+		bounds
+	    else
+		interval_union bounds b1
+    in
+    f slices Interval.bottom
+
+let getTopSlice x = getSlice x (0,max_int)
+
+let setSlice x (i1,i2) t =
+    let slices = getSlices x in
+    let rec f sls =
+	match sls with
+	| (j1,b1) :: (j2,b2) :: sls' ->
+	    if i1 >= j2 then
+		(j1,b1) :: f ((j2,b2) :: sls')
+	    else if i2 <= j1 then
+		sls
+	    else if i1 > j1 then
+		(j1,b1) :: f ((i1,b1) :: (j2,b2) :: sls')
+	    else if i1 == j1 then
+		(i1,t) :: (
+		    if i2 < j2 then
+			(i2,b1) :: (j2,b2) :: sls'
+		    else
+			f ((j2,b2) :: sls'))
+	    else (*if i1 < j1 then*) (
+		if i2 < j2 then
+		    (i2,b1) :: (j2,b2) :: sls'
+		else
+		    f ((j2,b2) :: sls'))
+	| [(j1,b1)] ->
+	    if i2 <= j1 then
+		sls
+	    else if i1 > j1 then
+		(j1,b1) :: f [(i1,b1)]
+	    else if i1 == j1 then
+		[(i1,t); (i2,b1)]
+	    else (*if i1 < j1 then*)
+		[(i2,b1)]
+    in
+    setSlices x (f slices)
+
+(* write the current bounds of x in the abstract state to the slice (i1,i2) *)
+let writeSlice x (i1,i2) =
+    let t = getVarBoundsScalar x in
+    setSlice x (i1,i2) t
+
+let writeTopSlice x = writeSlice x (0,max_int)
+
+(* read the new bounds of x in the abstract state from the slice (i1,i2) *)
+let readSlice x (i1,i2) =
+    let t = getSlice x (i1,i2) in
+    setVarBoundsScalar x t
+
+let readTopSlice x = readSlice x (0,max_int)
+
+let printSlices x =
+    printf "slices of %s:" x;
+    let rec f sls =
+	match sls with
+	| (j1,b1) :: (j2,b2) :: sls' ->
+	    printf " [%d:%d] -> %a;" j1 j2 Interval.print b1;
+	    f ((j2,b2) :: sls')
+	| [(j1,b1)] ->
+	    printf " [%d:] -> %a\n" j1 Interval.print b1
+    in
+    f (getSlices x)
 
 let isSyntConstOrLaplace x = isSyntacticallyConst x || isVarLaplace x
 
@@ -589,6 +699,40 @@ let rec getvars expr =
     | _ ->
 	[]
 
+let rec applySlices expr =
+    match expr with
+    | Slice (x,i1,i2) ->
+	readSlice x (i1,i2); V x
+    | Add (e1,e2) ->
+	Add (applySlices e1, applySlices e2)
+    | Mul (e1,e2) ->
+	Mul (applySlices e1, applySlices e2)
+    | Eq (e1,e2) ->
+	Eq (applySlices e1, applySlices e2)
+    | Le (e1,e2) ->
+	Le (applySlices e1, applySlices e2)
+    | IfThenElse (e1,e2,e3) ->
+	IfThenElse (applySlices e1, applySlices e2, applySlices e3)
+    | _ ->
+	expr
+
+let rec unapplySlices expr =
+    match expr with
+    | Slice (x,i1,i2) ->
+	readTopSlice x
+    | Add (e1,e2) ->
+	unapplySlices e1; unapplySlices e2
+    | Mul (e1,e2) ->
+	unapplySlices e1; unapplySlices e2
+    | Eq (e1,e2) ->
+	unapplySlices e1; unapplySlices e2
+    | Le (e1,e2) ->
+	unapplySlices e1; unapplySlices e2
+    | IfThenElse (e1,e2,e3) ->
+	unapplySlices e1; unapplySlices e2; unapplySlices e3
+    | _ ->
+	()
+
 (* independences *)
 let processStatement_gen6 st =
     (*println "processStatement_gen6";*)
@@ -669,7 +813,7 @@ let rec processRepeatStatement_dpDependset m n prog =
 let processStatement st =
     print_statement st;
     match st with
-    | Let (_,_) ->
+    | Let (x,_) ->
 	processStatement_gen1 st;
 	processStatement_gen2 st;
 	processStatement_gen3 st;
@@ -679,7 +823,15 @@ let processStatement st =
 	processStatement_gen5 st;
 	processStatement_gen6 st;
 	processStatement_vecDependset st;
-	processStatement_dpDependset st
+	processStatement_dpDependset st;
+	writeTopSlice x
+    | LetSlice (x,i1,i2,e) ->
+	let e' = applySlices e in
+	processStatement_gen2 (Let (x,e'));
+	writeSlice x (i1,i2);
+	unapplySlices e;
+	readTopSlice x;
+	printSlices x
     | Repeat (e1,prog) ->
 	List.iter killVar (programVars prog); (* remove the information that is not computed correctly for loops *)
 	let (inf,sup) = getExprBounds e1 in
@@ -717,6 +869,13 @@ let main () =
     (*
     initEnvironment largeExample;
     List.iter processStatement largeExample;
+    *)
+
+    (*
+    initEnvironment slicesExample;
+    List.iter print_statement slicesExample;
+    addVarInterval "x" 100.0 200.0;
+    List.iter processStatement slicesExample;
     *)
 
     initEnvironment example;
