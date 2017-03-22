@@ -1,0 +1,21 @@
+AddScalarDist i 2.0
+#AddVarInterval i 100 102
+i := Input()
+k := 2 * i
+v := Laplace()
+c := 3 * v
+a := k + c
+e := Laplace()
+g := k + e
+h := a * g
+d := a + 5
+f := a + d
+PrintDiffPrivDist a
+PrintDiffPrivDist c
+PrintDiffPrivDist g
+PrintDiffPrivDist a c
+PrintDiffPrivDist a g
+PrintDiffPrivDist a g h
+PrintDiffPrivDist a g h f
+PrintDiffPrivDist h
+PrintDiffPrivDist f

@@ -1,35 +1,8 @@
 open Apron
 open Format
+open Syntax
 
-type expr
-    = V of string
-    | Slice of string * int * int
-    | C of float
-    | Add of expr * expr
-    | Mul of expr * expr
-    | Laplace
-    | Le of expr * expr
-    | Eq of expr * expr
-    | IfThenElse of expr * expr * expr
-    | Sum of expr
-    (*
-    | And of expr * expr
-    | Not of expr
-    *)
-    | Input
-    (* the following are used only internally *)
-    | Sub of expr * expr
-    | Div of expr * expr
-    | Interval of float * float
-    | ScalarInterval of Scalar.t * Scalar.t
-
-type statement
-    = Let of string * expr
-    | LetSlice of string * int * int * expr
-    | Repeat of expr * program
-and program = statement list
-
-let debug = false
+let debug = ref false
 
 let rec print_expr expr =
     match expr with
@@ -42,9 +15,9 @@ let rec print_expr expr =
     | Div (e1,e2) -> print_char '('; print_expr e1; print_string " / "; print_expr e2; print_char ')'
     | Laplace -> print_string "Laplace()"
     | Le (e1,e2) -> print_char '('; print_expr e1; print_string " <= "; print_expr e2; print_char ')'
-    | Eq (e1,e2) -> print_char '('; print_expr e1; print_string " == "; print_expr e2; print_char ')'
+    | Eq (e1,e2) -> print_char '('; print_expr e1; print_string " = "; print_expr e2; print_char ')'
     | IfThenElse (e1,e2,e3) -> print_char '('; print_expr e1; print_string " ? "; print_expr e2; print_string " : "; print_expr e3; print_char ')'
-    | Sum e1 -> print_string "sum "; print_expr e1
+    | Sum e1 -> print_string "Sum "; print_expr e1
     (*
     | And (e1,e2) -> print_char '('; print_expr e1; print_string " && "; print_expr e2; print_char ')'
     | Not e1 -> print_char '!'; print_expr e1
@@ -57,13 +30,13 @@ let rec print_statement st =
     match st with
     | Let (x,expr) -> print_string x; print_string " := "; print_expr expr; print_newline ()
     | LetSlice (x,i1,i2,expr) -> printf "%s[%d:%d]" x i1 i2; print_string " := "; print_expr expr; print_newline ()
-    | Repeat (e1,prog) -> print_string "Repeat "; print_expr e1; print_newline (); print_program_indented prog
+    | Repeat (e1,prog) -> print_string "Repeat "; print_expr e1; print_newline (); print_program_indented prog; print_string "End"; print_newline ()
 and print_program_indented prog = List.iter (fun st -> print_string "    "; print_statement st) prog
 
 let print_program prog = List.iter print_statement prog
 
 
-let println s = if debug then (print_string s; print_newline ())
+let println s = if !debug then (print_string s; print_newline ())
 
 let sum_floats xs = List.fold_left (+.) 0. xs
 let string_of_string_list strs = String.concat "," strs
@@ -81,68 +54,10 @@ let rec uppercase_expr expr =
     | IfThenElse (e1,e2,e3) -> IfThenElse (uppercase_expr e1, uppercase_expr e2, uppercase_expr e3)
     | _ -> expr
 
-let uppercase_statement st =
-    match st with
-    | Let (x,expr) -> Let (String.uppercase x, uppercase_expr expr)
-
-let add_uppercase_copy prog =
-    prog @ List.map uppercase_statement prog
-
-
-(*
-let example = add_uppercase_copy [
-    Let ("i", Input);
-    Let ("k", Mul (C 2.0, V "i"));
-    Let ("v", Laplace);
-    Let ("c", Mul (C 3.0, V "v"));
-    Let ("a", Add (V "k", V "c"));
-    Let ("e", Laplace);
-    Let ("g", Add (V "k", V "e"));
-    Let ("h", Mul (V "a", V "g"));
-    Let ("d", Add (V "a", C 5.0));
-    Let ("f", Mul (V "a", V "d"));
-]
-*)
 
 let rec intsFromTo a b = if a > b then [] else a :: intsFromTo (a+1) b
 
-let largeExample = List.map (fun i -> Let (String.concat "" ["x"; string_of_int i], C 2.0)) (intsFromTo 1 20000)
-
-let example = [
-    Let ("a", Input);
-    Let ("f", Input);
-    (*Let ("b", Mul (C 3.0, V "a"));*)
-    Let ("b", Mul (V "a", V "f"));
-    Let ("c", Sum (V "b"));
-    (*Let ("i", C 3.0);
-    Let ("h", Mul (V "c", V "i"));*)
-    Let ("h", Add (V "c", V "c"));
-    Let ("d", Laplace);
-    Let ("e", Add (V "h", V "d"));
-    Let ("g", Mul (V "e", V "e"));
-    Let ("z", C 1.0);
-    Let ("y", C 0.0);
-    Let ("v", V "g");
-    Let ("n", Input);
-    Let ("i", C 0.0);
-    Repeat (V "n", [
-	Let ("i", Add (V "i", C 1.0));
-	Let ("v", C 0.0);
-	Let ("z", Mul (V "z", V "g"));
-	Let ("w", Mul (V "z", V "i"));
-	Let ("y", Add (V "y", V "w"));
-    ]);
-]
-
-let slicesExample = [
-    Let ("x", Input);
-    Let ("y", Add (V "x", C 3.0));
-    LetSlice ("y",100,200, Mul (Slice ("x",100,200), C 2.0));
-    LetSlice ("y",250,300, Mul (Slice ("x",100,150), C 0.5));
-    LetSlice ("z",30,80, Slice ("y",110,160));
-    LetSlice ("z",100,170, Slice ("y",240,310));
-    (*LetSlice ("z",200,210, Add (Slice ("y",40,50), Slice ("y",270,280))) (*doesn't work*)*)
-]
+let largeExample n = List.map (fun i -> Let (String.concat "" ["x"; string_of_int i], C 2.0)) (intsFromTo 1 n)
 
 let vExp x = String.concat "" ["E";x]
 let vVar x = String.concat "" ["V";x]
@@ -185,7 +100,7 @@ let programVars program =
 let initEnvironment program =
     let program_vars = programVars program in
     let program_vars2 = program_vars @ List.map vExp program_vars @ List.map vVar program_vars in
-    let _ = printf "variables: %s\n" (string_of_string_list program_vars2) in
+    let _ = if !debug then printf "variables: %s\n" (string_of_string_list program_vars2) in
     let vararr = Array.of_list program_vars2 in
     env := Environment.make [||] (Array.map Var.of_string vararr);
     astateRef := Abstract1.top mgr !env
@@ -208,7 +123,7 @@ let getVecDistOrInf x = if hasVecDist x then getVecDist x else infinity
 
 let getScalarDist x = try StringMap.find x !scalarDistMapRef with Not_found -> infinity
 let addScalarDist x d =
-    (*if debug then printf "addScalarDist %s %f\n" x d;*)
+    (* if !debug then printf "addScalarDist %s %f\n" x d; *)
     scalarDistMapRef := StringMap.add x (min d (getScalarDist x)) !scalarDistMapRef
 
 let expr2texpr expr =
@@ -511,7 +426,7 @@ let processStatement_gen1 st =
                 isLaplaceRef := StringSet.add x !isLaplaceRef
         | _ -> ()
     );
-    if debug then printf "isLaplaceRef = {%s}\n" (string_of_string_list (StringSet.elements !isLaplaceRef))
+    if !debug then printf "isLaplaceRef = {%s}\n" (string_of_string_list (StringSet.elements !isLaplaceRef))
 
 
 let processStatement_gen2 st =
@@ -622,7 +537,7 @@ let processStatement_gen4 st =
             assign_expr vx (C 1.0)
         | _ -> ()
     );
-    if debug then printf "astate=%a\n" Abstract1.print !astateRef
+    if !debug then printf "astate=%a\n" Abstract1.print !astateRef
 
 let processStatement_scalarDists st =
     (
@@ -654,11 +569,11 @@ let processStatement_scalarDists st =
 	| Sum (V y) ->
 	    let vd = vecDist [y] in
 	    let sd = scalarDist y in
-	    if debug then printf "processStatement_scalarDists: computeDists %s vd=%f sd=%f\n" x vd sd;
+	    if !debug then printf "processStatement_scalarDists: computeDists %s vd=%f sd=%f\n" x vd sd;
 	    addScalarDist x (vd *. sd)
         | _ -> ()
 	);
-	if debug then printf "scalarDist(%s) = %f\n" x (scalarDist x)
+	if !debug then printf "scalarDist(%s) = %f\n" x (scalarDist x)
     )
 
 let processStatement_isSyntacticallyConst st =
@@ -747,7 +662,7 @@ let processStatement_gen6 st =
             | _ -> List.fold_right StringSet.union (List.map getDependset (getvars expr)) StringSet.empty
         in
         dependsetMapRef := StringMap.add x dependset !dependsetMapRef;
-	if debug then (
+	if !debug then (
 	    printVarBounds x;
 	    printVarBounds (vExp x);
 	    printVarBounds (vVar x);
@@ -767,7 +682,7 @@ let processStatement_vecDependset st =
 		List.fold_right StringSet.union (List.map getVecDependset (getvars expr)) StringSet.empty
         in
         vecDependsetMapRef := StringMap.add x dependset !vecDependsetMapRef;
-	if debug then printf "vecDependset[%s] = {%s}\n" x (string_of_string_list (StringSet.elements dependset))
+	if !debug then printf "vecDependset[%s] = {%s}\n" x (string_of_string_list (StringSet.elements dependset))
 
 let dpDependsetChanged = ref false
 
@@ -797,12 +712,12 @@ let processStatement_dpDependset1 certainlyExecuted st =
 	    dpDependsetMapRef := StringMap.add x newDependset !dpDependsetMapRef;
 	    dpDependsetChanged := true
 	);
-	if debug then printf "dpDependset[%s] = {%s}\n" x (string_of_string_list (StringSet.elements newDependset))
+	if !debug then printf "dpDependset[%s] = {%s}\n" x (string_of_string_list (StringSet.elements newDependset))
 
 let processStatement_dpDependset st = processStatement_dpDependset1 true st
 
 let rec processRepeatStatement_dpDependset m n prog =
-    if debug then printf "processRepeatStatement_dpDependset %d %d\n" m n;
+    if !debug then printf "processRepeatStatement_dpDependset %d %d\n" m n;
     if n > 0 then (
 	dpDependsetChanged := false;
 	List.iter (processStatement_dpDependset1 (m>0)) prog;
@@ -841,64 +756,67 @@ let processStatement st =
 let printDiffPrivDist x =
     printf "diffPrivDist(%s) = %f\n" x (diffPrivDist [x])
 
-let printListDiffPrivDist xs ys =
+let printListDiffPrivDist xs =
     printf "diffPrivDist([%s]) = %f\n" (string_of_string_list xs) (diffPrivDist xs)
 
 let printVecDist xs =
     printf "vecDist([%s]) = %f\n" (string_of_string_list xs) (vecDist xs)
 
-let main () =
-    (*
-    List.iter print_statement example;
-    add_tcons (expr2tconsEQ (Sub (Sub (V "i", V "I"), Interval (-2.0, 2.0))));
-    List.iter processStatement example;
-    printDiffPrivDist "a" "A";
-    printDiffPrivDist "c" "C";
-    printDiffPrivDist "g" "G";
-    printListDiffPrivDist ["a";"c"] ["A";"C"];
-    printListDiffPrivDist ["a";"g"] ["A";"G"];
-    printListDiffPrivDist ["a";"g";"h"] ["A";"G";"H"];
-    printListDiffPrivDist ["a";"g";"h";"f"] ["A";"G";"H";"F"];
-    printDiffPrivDist "h" "H";
-    printDiffPrivDist "f" "F";
-    printExprBounds (Sub (V "i", V "I"));
-    printExprBounds (Sub (V "Ea", V "EA"));
-    printExprBounds (Sub (Sub (V "Ea", V "EA"), Mul (C 2.0, Sub (V "i", V "I"))));
-    *)
+let processHeaderDecl hdecl =
+    match hdecl with
+    | AddVarInterval (x,r1,r2) ->
+	addVarInterval x r1 r2
+    | AddScalarDist (x,sd) ->
+	addScalarDist x sd
+    | AddVecDist (xs,vd) ->
+	addVecDist xs vd
 
-    (*
-    initEnvironment largeExample;
-    List.iter processStatement largeExample;
-    *)
+let processHeader header = List.iter processHeaderDecl header
 
-    (*
-    initEnvironment slicesExample;
-    List.iter print_statement slicesExample;
-    addVarInterval "x" 100.0 200.0;
-    List.iter processStatement slicesExample;
-    *)
+let processFooterDecl fdecl =
+    match fdecl with
+    | PrintDiffPrivDist xs ->
+	printListDiffPrivDist xs
+    | PrintVecDist xs ->
+	printVecDist xs
 
+let processFooter footer = List.iter processFooterDecl footer
+
+let testLargeExample n =
+    let example = largeExample n in
     initEnvironment example;
-    List.iter print_statement example;
-    addVarInterval "a" 100.0 200.0;
-    addVarInterval "f" 50.0 60.0;
-    (*
-    addVarInterval "n" 0.0 0.0;
-    addVarInterval "n" 0.0 10.0;
-    *)
-    addVarInterval "n" 10.0 20.0;
-    addVecDist ["a";"f"] 2.0;
-    List.iter processStatement example;
-    printVecDist ["a"];
-    printVecDist ["f"];
-    printVecDist ["b"];
-    printVecDist ["a";"f";"b"];
-    printDiffPrivDist "d";
-    printDiffPrivDist "e";
-    printDiffPrivDist "g";
-    printDiffPrivDist "y";
-    printDiffPrivDist "v";
-    printf "astate=%a\n" Abstract1.print !astateRef;
+    List.iter processStatement example
+
+let main () =
+    if Array.length Sys.argv = 1 then (
+	printf "Usage: %s [-d] INPUTFILE\n" Sys.argv.(0);
+	printf "Processes the file INPUTFILE\n";
+	printf "-d        enables debugging output\n";
+	printf "-l LINES  processes a simple example with LINES lines (for testing performance)\n"
+    );
+
+    let i = ref 1 in
+    while !i < Array.length Sys.argv do
+	if Sys.argv.(!i) = "-d" then
+	    debug := true
+	else if Sys.argv.(!i) = "-l" then (
+	    let n = int_of_string(Sys.argv.(!i+1)) in
+	    testLargeExample n;
+	    i := !i+1
+	) else (
+	    let ic = open_in Sys.argv.(!i) in
+	    let lexbuf = Lexing.from_channel ic in
+	    let (header,prog,footer) = Myparser.prog Lexer.token lexbuf in
+	    initEnvironment prog;
+	    if !debug then (print_program prog; flush stdout);
+	    processHeader header;
+	    List.iter processStatement prog;
+	    processFooter footer;
+	    close_in ic;
+	    i := Array.length Sys.argv - 1
+	);
+	i := !i+1
+    done
 ;;
 
 

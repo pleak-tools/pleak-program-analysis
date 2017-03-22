@@ -1,0 +1,37 @@
+AddVarInterval a 100 200
+AddVarInterval f 50 60
+#AddVarInterval n 0 0
+#AddVarInterval n 0 10
+AddVarInterval n 10 20
+AddVecDist a f 2
+
+a := Input()
+f := Input()
+b := a * f
+c := Sum b
+h := c + c
+d := Laplace()
+e := h + d
+g := e * e
+z := 1.0
+y := 0.0
+v := g
+n := Input()
+i := 0
+Repeat n
+    i := i + 1
+    v := 0
+    z := z * g
+    w := z * i
+    y := y * w
+End
+
+PrintVecDist a
+PrintVecDist f
+PrintVecDist b
+PrintVecDist a f b
+PrintDiffPrivDist d
+PrintDiffPrivDist e
+PrintDiffPrivDist g
+PrintDiffPrivDist y
+PrintDiffPrivDist v
