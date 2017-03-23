@@ -1,0 +1,38 @@
+# The same as example1.txt but with some variables defined using complex expressions instead of simple expressions
+# or with order of operands switched
+
+AddVarInterval a 100 200
+AddVarInterval f 50 60
+#AddVarInterval n 0 0
+#AddVarInterval n 0 10
+AddVarInterval n 10 20
+AddVecDist a f 2
+
+a := Input()
+f := Input()
+b := a * f
+c := Sum b
+d := Laplace()
+e := c * 2 + d
+g := e * e
+z := 1.0
+y := 0.0
+v := g
+n := Input()
+i := 0
+Repeat n
+    i := 1 + i
+    v := 0
+    z := z * g
+    y := y * z * i
+End
+
+PrintVecDist a
+PrintVecDist f
+PrintVecDist b
+PrintVecDist a f b
+PrintDiffPrivDist d
+PrintDiffPrivDist e
+PrintDiffPrivDist g
+PrintDiffPrivDist y
+PrintDiffPrivDist v

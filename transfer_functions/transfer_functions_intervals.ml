@@ -787,6 +787,87 @@ let testLargeExample n =
     initEnvironment example;
     List.iter processStatement example
 
+let tmpUid = ref 0
+let getTmpVar () =
+    tmpUid := !tmpUid + 1;
+    String.concat "" ["$"; string_of_int (!tmpUid)]
+
+let simplifyAlways e =
+    let t = getTmpVar () in
+    ([Let (t,e)], V t)
+
+let simplifyKeepingVars e =
+    match e with
+    | V _ ->
+	([], e)
+    | _ ->
+	simplifyAlways e
+
+let simplifyKeepingVarsAndConsts e =
+    match e with
+    | V _
+    | C _ ->
+	([], e)
+    | _ ->
+	simplifyAlways e
+
+let rec simplifyExpr expr =
+    match expr with
+    | Add (e1,e2) ->
+	let (st1a,e1a) = simplifyExpr e1 in
+	let (st2a,e2a) = simplifyExpr e2 in
+	let (st1b,e1b) = simplifyKeepingVars e1a in
+	let (st2b,e2b) = simplifyKeepingVarsAndConsts e2a in
+	(List.concat [st1a;st2a;st1b;st2b], Add (e1b,e2b))
+    | Mul (e1,e2) ->
+	let (st1a,e1a) = simplifyExpr e1 in
+	let (st2a,e2a) = simplifyExpr e2 in
+	let (st1b,e1b) = simplifyKeepingVarsAndConsts e1a in
+	let (st2b,e2b) = simplifyKeepingVars e2a in
+	(List.concat [st1a;st2a;st1b;st2b], Mul (e1b,e2b))
+    | Eq (e1,e2) ->
+	let (st1a,e1a) = simplifyExpr e1 in
+	let (st2a,e2a) = simplifyExpr e2 in
+	let (st1b,e1b) = simplifyKeepingVars e1a in
+	let (st2b,e2b) = simplifyKeepingVars e2a in
+	(List.concat [st1a;st2a;st1b;st2b], Eq (e1b,e2b))
+    | Le (e1,e2) ->
+	let (st1a,e1a) = simplifyExpr e1 in
+	let (st2a,e2a) = simplifyExpr e2 in
+	let (st1b,e1b) = simplifyKeepingVars e1a in
+	let (st2b,e2b) = simplifyKeepingVars e2a in
+	(List.concat [st1a;st2a;st1b;st2b], Le (e1b,e2b))
+    | Sum e1 ->
+	let (st1a,e1a) = simplifyExpr e1 in
+	let (st1b,e1b) = simplifyKeepingVars e1a in
+	(List.concat [st1a;st1b], Sum e1b)
+    | IfThenElse (e1,e2,e3) ->
+	let (st1a,e1a) = simplifyExpr e1 in
+	let (st2a,e2a) = simplifyExpr e2 in
+	let (st3a,e3a) = simplifyExpr e3 in
+	let (st1b,e1b) = simplifyKeepingVars e1a in
+	let (st2b,e2b) = simplifyKeepingVars e2a in
+	let (st3b,e3b) = simplifyKeepingVars e3a in
+	(List.concat [st1a;st2a;st3a;st1b;st2b;st3b], IfThenElse (e1b,e2b,e3b))
+    | _ ->
+	([], expr)
+
+let rec simplifyStatement st =
+    match st with
+    | Let (x,expr) ->
+	let (st1,e1) = simplifyExpr expr in
+	st1 @ [Let (x,e1)]
+    | LetSlice (x,i1,i2,expr) ->
+	let (st1,e1) = simplifyExpr expr in
+	st1 @ [LetSlice (x,i1,i2,e1)]
+    | Repeat (e1,prog) ->
+	let (st1a,e1a) = simplifyExpr e1 in
+	let (st1b,e1b) = simplifyKeepingVarsAndConsts e1a in
+	let prog' = simplifyProgram prog in
+	st1a @ st1b @ [Repeat (e1b,prog')]
+
+and simplifyProgram prog = List.concat (List.map simplifyStatement prog)
+
 let main () =
     if Array.length Sys.argv = 1 then (
 	printf "Usage: %s [-d] INPUTFILE\n" Sys.argv.(0);
@@ -806,7 +887,8 @@ let main () =
 	) else (
 	    let ic = open_in Sys.argv.(!i) in
 	    let lexbuf = Lexing.from_channel ic in
-	    let (header,prog,footer) = Myparser.prog Lexer.token lexbuf in
+	    let (header,prog0,footer) = Myparser.prog Lexer.token lexbuf in
+	    let prog = simplifyProgram prog0 in
 	    initEnvironment prog;
 	    if !debug then (print_program prog; flush stdout);
 	    processHeader header;
