@@ -1,7 +1,7 @@
 # The same as example1.txt but with some variables defined using complex expressions instead of simple expressions
-# or with order of operands switched
+# or with order of operands switched or values negated
 
-AddVarInterval a 100 200
+AddVarInterval a -200 -100
 AddVarInterval f 50 60
 #AddVarInterval n 0 0
 #AddVarInterval n 0 10
@@ -15,7 +15,7 @@ c := Sum b
 d := Laplace()
 e := c * 2 + d
 g := e * e
-z := 1.0
+z := -1.0
 y := 0.0
 v := g
 n := Input()

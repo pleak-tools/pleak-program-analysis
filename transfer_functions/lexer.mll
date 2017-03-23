@@ -8,8 +8,8 @@ rule token = parse
     | [' ' '\t'] { token lexbuf }
     | newline { EOL }
     | '#' nonnewline* newline { EOL }
-    | digit+ '.' digit* as lxm { FLOAT(float_of_string lxm) }
-    | digit+ as lxm { INT(int_of_string lxm) }
+    | '-'? digit+ '.' digit* as lxm { FLOAT(float_of_string lxm) }
+    | '-'? digit+ as lxm { INT(int_of_string lxm) }
     | "AddVarInterval" { ADDVARINTERVAL }
     | "AddScalarDist" { ADDSCALARDIST }
     | "AddVecDist" { ADDVECDIST }
